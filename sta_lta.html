@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>STA/LTA Animation</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #ffffff;
+            color: #333333;
+        }
+        h1 {
+            text-align: center;
+            color: #1f77b4;
+            margin-bottom: 40px;
+        }
+        .plot-container {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        #sta-lta-plot {
+            width: 100%;
+            height: 400px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>STA/LTA Animation</h1>
+    <div class="plot-container">
+        <div id="sta-lta-plot"></div>
+    </div>
+
+    <script>
+        const fs = 100; // Sampling rate (Hz)
+        const duration = 30; // seconds
+        const totalSamples = fs * duration;
+        let t = Array.from({length: totalSamples}, (_, i) => i / fs); // Time vector
+
+        // Generate background noise using Box-Muller transform for Gaussian noise
+        function generateNoise(length) {
+            let noise = [];
+            for (let i = 0; i < length; i++) {
+                let u = 0, v = 0;
+                while(u === 0) u = Math.random();
+                while(v === 0) v = Math.random();
+                let num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+                noise.push(num);
+            }
+            return noise;
+        }
+
+        let noise = generateNoise(totalSamples);
+
+        // Generate strong event at t=10s (Gaussian pulse)
+        let event1 = Array.from({length: totalSamples}, (_, i) => {
+            let time = i / fs;
+            return 5 * Math.exp(-0.5 * Math.pow((time - 10) / 0.5, 2));
+        });
+
+        // Generate weak event at t=20s (Gaussian pulse)
+        let event2 = Array.from({length: totalSamples}, (_, i) => {
+            let time = i / fs;
+            return 0.5 * Math.exp(-0.5 * Math.pow((time - 20) / 1.5, 2));
+        });
+
+        // Combined signal: noise + strong event + weak event
+        let signal = noise.map((n, idx) => n + (event1[idx] || 0) + (event2[idx] || 0));
+
+        // STA/LTA Algorithm Parameters
+        const staWindow = Math.floor(0.5 * fs); // 0.5 seconds
+        const ltaWindow = Math.floor(5 * fs);   // 5 seconds
+        const sta_lta_threshold = 3;            // Threshold for detection
+
+        // Function to calculate STA/LTA ratio
+        function calculateStaLta(signal, staWin, ltaWin) {
+            let sta = new Array(signal.length).fill(0);
+            let lta = new Array(signal.length).fill(0);
+            let ratio = new Array(signal.length).fill(0);
+
+            // Precompute cumulative sum of squares
+            let cumSumSq = [0];
+            for (let i = 0; i < signal.length; i++) {
+                cumSumSq.push(cumSumSq[i] + Math.pow(signal[i], 2));
+            }
+
+            for (let i = 0; i < signal.length; i++) {
+                let staStart = Math.max(0, i - staWin);
+                let staEnd = i;
+                let ltaStart = Math.max(0, i - ltaWin);
+                let ltaEnd = i;
+
+                let staSum = cumSumSq[staEnd] - cumSumSq[staStart];
+                let ltaSum = cumSumSq[ltaEnd] - cumSumSq[ltaStart];
+
+                sta[i] = staSum / staWin;
+                lta[i] = ltaSum / ltaWin;
+                ratio[i] = lta[i] === 0 ? 0 : sta[i] / lta[i];
+            }
+
+            return ratio;
+        }
+
+        let sta_lta_ratio = calculateStaLta(signal, staWindow, ltaWindow);
+
+        // Highlight event sections
+        let highlightedSignalStrong = signal.map((value, index) => {
+            // Highlight strong event (between t=9.5 and t=10.5)
+            if ((index / fs >= 9.5 && index / fs <= 10.5)) {
+                return value; // Keep original value for highlighting strong event
+            }
+            return null; // Set to null for non-highlighted sections
+        });
+
+        let highlightedSignalWeak = signal.map((value, index) => {
+            // Highlight weak event (between t=19 and t=21) but missed by STA/LTA
+            if ((index / fs >= 19 && index / fs <= 21)) {
+                return value; // Keep original value for highlighting missed weak event
+            }
+            return null; // Set to null for non-highlighted sections
+        });
+
+        // Setup the STA/LTA Plot using Plotly
+        let staLtaTrace1 = {
+            x: [],
+            y: [],
+            mode: 'lines',
+            name: 'Seismic Signal',
+            line: {color: 'blue'}
+        };
+
+        let highlightedTraceStrong = {
+            x: [],
+            y: [],
+            mode: 'lines',
+            name: 'Highlighted Strong Event',
+            line: {color: 'red'}
+        };
+
+        let highlightedTraceWeak = {
+            x: [],
+            y: [],
+            mode: 'lines',
+            name: 'Missed Weak Event',
+            line: {color: 'green', dash: 'dot'}
+        };
+
+        let staLtaTrace2 = {
+            x: [],
+            y: [],
+            mode: 'lines',
+            name: 'STA/LTA Ratio',
+            line: {color: 'orange'}
+        };
+
+        let staLtaLayout = {
+            title: 'STA/LTA Algorithm for Seismic Detection',
+            xaxis: {title: 'Time (s)', range: [0, duration]},
+            yaxis: {title: 'Amplitude / STA/LTA Ratio', range: [Math.min(...signal) - 1, Math.max(...signal) + 5]},
+            shapes: [
+                {
+                    type: 'line',
+                    x0: 0,
+                    x1: duration,
+                    y0: sta_lta_threshold,
+                    y1: sta_lta_threshold,
+                    line: {color: 'red', dash: 'dot'}
+                }
+            ]
+        };
+
+        Plotly.newPlot('sta-lta-plot', [staLtaTrace1, highlightedTraceStrong, highlightedTraceWeak, staLtaTrace2], staLtaLayout);
+
+        // Animation variables
+        let currentFrame = 0;
+        const frameStep = 5; // Number of samples per frame for smoother animation
+        const frameInterval = 100; // milliseconds between frames
+        let animationId;
+
+        function updatePlots() {
+            if (currentFrame >= totalSamples) {
+                clearInterval(animationId);
+                animationId = null;
+                console.log("Animation Completed");
+                return;
+            }
+
+            // Determine the end of the current frame
+            let endFrame = Math.min(currentFrame + frameStep, totalSamples);
+
+            // Update STA/LTA Plot
+            let currentTime = t.slice(0, endFrame);
+            let currentSignal = signal.slice(0, endFrame);
+            let currentHighlightedStrong = highlightedSignalStrong.slice(0, endFrame);
+            let currentHighlightedWeak = highlightedSignalWeak.slice(0, endFrame);
+            let currentStaLta = sta_lta_ratio.slice(0, endFrame);
+
+            Plotly.update('sta-lta-plot', {
+                x: [currentTime, currentTime, currentTime, currentTime],
+                y: [currentSignal, currentHighlightedStrong, currentHighlightedWeak, currentStaLta]
+            }, {}, [0, 1, 2, 3]);
+
+            currentFrame = endFrame;
+            console.log("Updated to Frame:", currentFrame);
+        }
+
+        // Start the animation automatically
+        window.onload = function() {
+            console.log("Starting Animation");
+            animationId = setInterval(updatePlots, frameInterval);
+        };
+    </script>
+
+</body>
+</html>
